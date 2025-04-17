@@ -1,0 +1,10 @@
+<launch>
+    <!-- 启动 YOLOv8 RKNN 推理节点 -->
+    <node name="yolov8_rknn_ros" pkg="yolov8_rknn_ros" type="yolov8_rknn_ros" output="screen">
+        <!-- 订阅的相机图像话题 -->
+        <param name="image_topic" value="/camera/image_raw"/>
+        
+        <!-- RKNN 模型路径 -->
+        <param name="model_path" value="/home/robot/yolov8.rknn"/>
+    </node>
+</launch>
