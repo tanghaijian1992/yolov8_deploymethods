@@ -1,13 +1,21 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
-#include <opencv2/opencv.hpp>
 #include "rknn_api.h"
 
 #include <ros/ros.h>
 #include <sensor_msgs/Image.h>
-#include <cv_bridge/cv_bridge.h>
 #include <fstream>
+
+
+#include <im2d.h>
+#include "rga.h"
+#include "RgaUtils.h"
+#undef INTER_LINEAR  // 去掉 RGA 中宏定义
+
+#include <opencv2/opencv.hpp>
+#include <cv_bridge/cv_bridge.h>
+
 
 #define ONNX_MODEL "/home/robot/rknn_ws/last0303.onnx"
 #define RKNN_MODEL "/home/robot/rknn_ws/last0303_3.rknn"
@@ -365,23 +373,59 @@ private:
         // 获取开始时间点
         auto start = std::chrono::high_resolution_clock::now();
 
-        cv::Mat image = convertImageMsgToMatManual(msg);
+        cv::Mat orig_img = convertImageMsgToMatManual(msg);
+
+        //使用rga对图像进行resize和convert格式
+        int src_width = orig_img.cols;
+        int src_height = orig_img.rows;
+
+        // 2. 目标尺寸
+        int dst_width = input_width;
+        int dst_height = input_height;
+
+        // 3. 准备 src buffer（im2d 接口要求分配物理连续内存，测试中普通 Mat 也能用）
+        im_rect src_rect = { 0, 0, src_width, src_height };
+        im_rect dst_rect = { 0, 0, dst_width, dst_height };
+
+        // 4. 创建目标 Mat（BGR）
+        cv::Mat dst_img(dst_height, dst_width, CV_8UC3);
+
+        // 5. 设置 src/dst 的 rga buffer
+        rga_buffer_t src_buf = wrapbuffer_virtualaddr(
+            orig_img.data, src_width, src_height, RK_FORMAT_BGR_888);
+        rga_buffer_t dst_buf = wrapbuffer_virtualaddr(
+            dst_img.data, dst_width, dst_height, RK_FORMAT_BGR_888);
+
+        // 6. 执行 resize 操作
+        ret = imresize_t(src_buf, dst_buf, 0, 0, 1, 1);
+        if (ret != IM_STATUS_SUCCESS) {
+            std::cerr << "RGA resize failed: " << imStrError(ret) << std::endl;
+            return ;
+        }
+
+        std::cout << "RGA resize success." << std::endl;
 
 
-        cv::Mat orig_img = image.clone();
-        int img_h = orig_img.rows;
-        int img_w = orig_img.cols;
 
-        // 预处理图像
-        cv::Mat resized;
-        cv::resize(orig_img, resized, cv::Size(input_width, input_height), 0, 0, cv::INTER_LINEAR);
-        cv::cvtColor(resized, resized, cv::COLOR_BGR2RGB);
+        cv::Mat resized(dst_height, dst_width, CV_8UC3);
+        rga_buffer_t src_convert = wrapbuffer_virtualaddr(dst_img.data, dst_width, dst_height, RK_FORMAT_BGR_888);
+        rga_buffer_t dst_convert = wrapbuffer_virtualaddr(resized.data, dst_width, dst_height, RK_FORMAT_RGB_888);
+
+        // 4. 执行格式转换（BGR -> RGB）
+        // int ret = imconvert(src_convert, dst_convert, NULL);
+        ret = imcvtcolor(src_convert, dst_convert, RK_FORMAT_BGR_888, RK_FORMAT_RGB_888);
+        if (ret != IM_STATUS_SUCCESS) {
+            std::cerr << "RGA convert failed: " << imStrError(ret) << std::endl;
+            return ;
+        }
+
+        std::cout << "RGA BGR -> RGB success." << std::endl;
 
         // 调用 RKNN 推理
         std::vector<std::vector<float>> outputs = export_rknn_inference(resized);
 
         // 后处理得到检测框
-        std::vector<DetectBox> predbox = postprocess(outputs, img_h, img_w);
+        std::vector<DetectBox> predbox = postprocess(outputs, src_height, src_width);
         std::cout << "Detected boxes: " << predbox.size() << std::endl;
 
         // 绘制检测结果
