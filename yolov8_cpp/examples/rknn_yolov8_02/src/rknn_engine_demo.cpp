@@ -34,6 +34,11 @@ std::vector<std::vector<int>> map_size = { {80, 80}, {40, 40}, {20, 20} };
 const int input_height = 640;
 const int input_width = 640;
 
+rknn_context ctx;
+int ret;
+const int output_num = 2;
+rknn_output outputs[output_num];
+
 // 计算 anchor 总数
 int anchors = (input_height / strides[0] * input_width / strides[0] +
                input_height / strides[1] * input_width / strides[1] +
@@ -161,37 +166,11 @@ static float DeQnt2F32(int8_t qnt, int zp, float scale)
 
 // RKNN 推理封装函数
 std::vector<std::vector<float>> export_rknn_inference(const cv::Mat& img) {
-    // 创建 RKNN 上下文
-    rknn_context ctx;
-    std::string model_path = "/home/robot/rknn_ws/yolov8_plate.rknn";      //需要替换为自己的目录路径
-
-    // 读取模型文件到内存
-    std::ifstream file(model_path, std::ios::binary | std::ios::ate);
-    if (!file.good()) {
-        std::cerr << "Error opening model file: " << model_path << std::endl;
-        exit(-1);
-    }
-    std::streamsize model_size = file.tellg();
-    file.seekg(0, std::ios::beg);
-    std::vector<char> model_data(model_size);
-    if (!file.read(model_data.data(), model_size)) {
-        std::cerr << "Error reading model file" << std::endl;
-        exit(-1);
-    }
-    
-    // 使用模型数据初始化
-    int ret = rknn_init(&ctx, model_data.data(), model_size, 0, nullptr);
-    if (ret < 0) {
-        std::cerr << "RKNN init failed!" << std::endl;
-        exit(ret);
-    }
-    
-
     // 准备输入数据
     // 假设 img 为 RGB 格式，尺寸为 input_width x input_height，且数据类型为 CV_8UC3
     // 若需要归一化处理，可参考下述转换（本例中仅做归一化处理示例）
     cv::Mat input_img;
-    img.convertTo(input_img, CV_32FC3, 1.0 );
+    img.convertTo(input_img, CV_8UC3, 1.0 );
 
     // 设置输入 tensor（具体参数根据模型要求调整）
     rknn_input inputs[1];
@@ -200,9 +179,11 @@ std::vector<std::vector<float>> export_rknn_inference(const cv::Mat& img) {
     inputs[0].buf = input_img.data;
     inputs[0].size = input_img.total() * input_img.elemSize();
     inputs[0].pass_through = false;
-    // 如果模型输入为浮点型
-    inputs[0].type = RKNN_TENSOR_FLOAT32;
+    // 如果模型输入为UINT8型
+    inputs[0].type = RKNN_TENSOR_UINT8;
     inputs[0].fmt = RKNN_TENSOR_NHWC;
+
+    // auto t0 = std::chrono::high_resolution_clock::now();
 
     ret = rknn_inputs_set(ctx, 1, inputs);
     if (ret < 0) {
@@ -210,6 +191,7 @@ std::vector<std::vector<float>> export_rknn_inference(const cv::Mat& img) {
         exit(ret);
     }
 
+    // auto t1 = std::chrono::high_resolution_clock::now();
     // 运行模型
     ret = rknn_run(ctx, nullptr);
     if (ret < 0) {
@@ -217,9 +199,9 @@ std::vector<std::vector<float>> export_rknn_inference(const cv::Mat& img) {
         exit(ret);
     }
 
+    // auto t2 = std::chrono::high_resolution_clock::now();
+
     // 获取输出（假设有两个输出）
-    const int output_num = 2;
-    rknn_output outputs[output_num];
     memset(outputs, 0, sizeof(outputs));
     for (int i = 0; i < output_num; i++) {
         outputs[i].want_float = false;
@@ -230,6 +212,8 @@ std::vector<std::vector<float>> export_rknn_inference(const cv::Mat& img) {
         std::cerr << "Get outputs failed!" << std::endl;
         exit(ret);
     }
+
+    // auto t3 = std::chrono::high_resolution_clock::now();
 
     rknn_tensor_attr output_attrs[output_num];
     memset(output_attrs, 0, sizeof(output_attrs));
@@ -277,9 +261,13 @@ std::vector<std::vector<float>> export_rknn_inference(const cv::Mat& img) {
         ret_outputs.push_back(conv_buff);
     }
 
-    // 释放输出
-    rknn_outputs_release(ctx, output_num, outputs);
-    rknn_destroy(ctx);
+    // auto t4 = std::chrono::high_resolution_clock::now();
+
+
+    // std::cout << "Preprocess: " << (std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0)).count() << " ms\n";
+    // std::cout << "Inference : " << (std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1)).count()  << " ms\n";
+    // std::cout << "OutputGet : " << (std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2)).count()  << " ms\n";
+    // std::cout << "反量化: " << (std::chrono::duration_cast<std::chrono::milliseconds>(t4 - t3)).count()  << " ms\n";
 
     return ret_outputs;
 }
@@ -334,9 +322,37 @@ public:
 
         // 订阅 ROS 话题
         sub = nh.subscribe("/device_0/rgb/rgb_raw", 1, &YoloV8RKNN::imageCallback, this);
+
+        // 创建 RKNN 上下文
+        std::string model_path = "/home/robot/yolov8_deploymethods/yolov8_cpp/examples/rknn_yolov8_02/yolov8_plate.rknn";      //需要替换为自己的目录路径
+
+        // 读取模型文件到内存
+        std::ifstream file(model_path, std::ios::binary | std::ios::ate);
+        if (!file.good()) {
+            std::cerr << "Error opening model file: " << model_path << std::endl;
+            exit(-1);
+        }
+        std::streamsize model_size = file.tellg();
+        file.seekg(0, std::ios::beg);
+        std::vector<char> model_data(model_size);
+        if (!file.read(model_data.data(), model_size)) {
+            std::cerr << "Error reading model file" << std::endl;
+            exit(-1);
+        }
+        
+        // 使用模型数据初始化
+        ret = rknn_init(&ctx, model_data.data(), model_size, RKNN_FLAG_PRIOR_HIGH, nullptr);
+        if (ret < 0) {
+            std::cerr << "RKNN init failed!" << std::endl;
+            exit(ret);
+        }
+
     }
 
     ~YoloV8RKNN() {
+        // 释放输出
+        rknn_outputs_release(ctx, output_num, outputs);
+        rknn_destroy(ctx);
     }
 
 private:
@@ -381,7 +397,7 @@ private:
             cv::putText(orig_img, title, cv::Point(xmin, ymin), cv::FONT_HERSHEY_SIMPLEX, 0.7,
                         cv::Scalar(0, 0, 255), 2);
         }
-        // cv::imwrite("/home/robot/rknn_ws/test_rknn_result_noconcat_qua.jpg", orig_img);
+        // cv::imwrite("/home/robot/yolov8_deploymethods/yolov8_cpp/examples/rknn_yolov8_02/test_rknn_result_noconcat_qua.jpg", orig_img);
         // std::cout << "Result saved to ./test_rknn_result_noconcat.jpg" << std::endl;
 
         auto end = std::chrono::high_resolution_clock::now();

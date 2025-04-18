@@ -23,6 +23,11 @@ const vector<string> CLASSES = {"plate_base"};
 const int CLASS_NUM = CLASSES.size();
 const int STRIDES[3] = {8, 16, 32};
 
+rknn_context ctx;
+int ret;
+rknn_input inputs[1];
+rknn_output outputs[1];
+
 // 计算 anchors 数量
 const int ANCHORS = (INPUT_WIDTH / STRIDES[0]) * (INPUT_HEIGHT / STRIDES[0]) +
                     (INPUT_WIDTH / STRIDES[1]) * (INPUT_HEIGHT / STRIDES[1]) +
@@ -113,17 +118,6 @@ vector<DetectBox> postprocess(float *output, int img_h, int img_w) {
 
 // 加载并运行 RKNN 推理
 vector<DetectBox> run_rknn_inference(Mat &image) {
-    rknn_context ctx;
-    std::string model_path = "/home/robot/rknn_ws/yolov8_plate.rknn";            //********需要改为自己电脑的路径 */
-    void* model_ptr = (void*)model_path.c_str();  // 推荐
-    int ret = rknn_init(&ctx, model_ptr, 0, 0, NULL);
-    if (ret != 0) {
-        cerr << "rknn_init failed: " << ret << endl;
-        exit(-1);
-    }
-    rknn_input inputs[1];
-    rknn_output outputs[1];
-
     // 设置输入
     Mat img_resized;
     resize(image, img_resized, Size(INPUT_WIDTH, INPUT_HEIGHT));
@@ -159,10 +153,6 @@ vector<DetectBox> run_rknn_inference(Mat &image) {
 
     // 解析输出
     vector<DetectBox> results = postprocess((float *)outputs[0].buf, image.rows, image.cols);
-
-    // 释放 RKNN 资源
-    rknn_outputs_release(ctx, 1, outputs);
-    rknn_destroy(ctx);
 
     return results;
 }
@@ -217,9 +207,20 @@ public:
 
         // 订阅 ROS 话题
         sub = nh.subscribe("/device_0/rgb/rgb_raw", 1, &YoloV8RKNN::imageCallback, this);
+
+        std::string model_path = "/home/robot/yolov8_deploymethods/yolov8_cpp/examples/rknn_yolov8_01/yolov8_plate.rknn";            //********需要改为自己电脑的路径 */
+        void* model_ptr = (void*)model_path.c_str();  // 推荐
+        ret = rknn_init(&ctx, model_ptr, 0, 0, NULL);
+        if (ret != 0) {
+            cerr << "rknn_init failed: " << ret << endl;
+            exit(-1);
+        }
     }
 
     ~YoloV8RKNN() {
+        // 释放 RKNN 资源
+        rknn_outputs_release(ctx, 1, outputs);
+        rknn_destroy(ctx);
     }
 
 private:
@@ -259,7 +260,7 @@ private:
                     FONT_HERSHEY_SIMPLEX, 0.7, Scalar(0, 0, 255), 2);
         }
 
-        imwrite("/home/robot/rknn_ws/test_rknn_result.jpg", image);
+        // imwrite("/home/robot/rknn_ws/test_rknn_result.jpg", image);
 
         auto end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
