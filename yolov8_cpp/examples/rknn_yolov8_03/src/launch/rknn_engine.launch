@@ -1,0 +1,5 @@
+<launch>
+    <!-- 启动 YOLOv8 RKNN 推理节点 -->
+    <node name="rknn_engine_demo" pkg="yolov8_rknn_ros" type="rknn_engine_demo" output="screen">
+    </node>
+</launch>
